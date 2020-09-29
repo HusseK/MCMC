@@ -17,6 +17,7 @@ library(Rcpp)
 library(dplyr)
 library(inline)
 library(tm)
+library(stats)
 library(bookdown)
 ```
 
