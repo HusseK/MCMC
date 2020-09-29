@@ -1,0 +1,312 @@
+---
+title: "Projet"
+author: "Madany H Keita"
+date: "16 Mai 2020"
+output: 
+  bookdown::html_document2:
+    fig_caption: yes
+    number_sections: no
+runtime: shiny
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(shiny)
+library(stringr)
+library(Rcpp)
+library(dplyr)
+library(inline)
+library(tm)
+library(bookdown)
+```
+
+# Introduction
+
+Le but de ce projet était de programmer  un algorithme de type MCMC pour
+déchiffrer un texte en français ou en anglais. 
+
+Mon programme se base sur la fréquence des digrammes dans la langue anglaise.
+On pourrait essayer chaque permutation et essayer de décoder le texte comme cela mais cela revient à essayer toutes les combinaisons possibles en moyenne.
+On va voir que l'aléatoire peut nous aider à résoudre ce problème à l'aide d'un algorithme de type Monte-Carlo Markov Chain.
+
+```{r,include=FALSE, echo=FALSE}
+alphabet <- c("A","B","C","D","E","F","G","H","I","J","K","L","M","N","O","P","Q","R","S","T","U","V","W","X","Y","Z"," ")
+load('projet.RData')
+digramme_freq[729]=10E-5#je fais cela car la fréquence du double espace est nulle donc on aura probablement une division par 0 dans la suite
+
+enleve_retours <- function(texte){
+  #enleve les \n de la chaine
+  for(i in 1: str_length(texte)){
+    if (str_sub(texte,i,i)=="\n"){
+      texte <-`str_sub<-`(texte,i,i,omit_na=FALSE," ")
+    }
+  }
+  return(texte)
+}
+
+enleve_espace <- function(texte){
+  #enleve les espaces de la chaine
+  for(i in 1: str_length(texte)){
+    if (str_sub(texte,i,i)==" "){
+      texte <-`str_sub<-`(texte,i,i,omit_na=FALSE,"")
+    }
+  }
+  return(texte)
+}
+
+bigrammes_de_la_chaine <- function(chaine){
+  #retourne tous les bigrammes de la chaine
+  res <- c()
+  chaine <- toupper(chaine)
+  a_chaine <- strsplit(chaine,NULL)
+  lettres <- a_chaine[[1]][a_chaine[[1]]!=""]
+  for(i in 1:(length(lettres)-1)){
+    res <- append(res,str_c(lettres[i],lettres[i+1]))
+  }
+  return(res)
+}
+
+swap <- function(vec,i,j){
+  #échange 2 éléments d'un vecteur aux indices i et j
+  a <- vec[j]
+  vec[j] = vec[i]
+  vec[i] = a
+  return (vec)
+}
+
+permutation2<-function(alphabet1,alphabet2){
+  #rend une permutation aleatoire uniformemment dans S26 (l'ensemble des permutations de l'ensemble [1,26] ) sous forme de vecteur
+  res <- alphabet
+  for(i in (length(alphabet)):1){
+    j <- floor(i*runif(1)+1)
+    res<- swap(res,i,j)
+  }
+  return(res)
+}
+
+exemple_f <- permutation2(alphabet1 = alphabet,alphabet2 = alphabet)
+
+transpose_bijection <- function(f){
+  s <- sample(f,2, replace=FALSE)
+  i <- which(f==s[1])
+  j <- which(f==s[2])
+
+  f <- swap(f,i,j)
+  return(f)
+}
+
+pas_dans <-function(vec,elem){
+  #retourne TRUE si un élément est n'est pas dans un vecteur FALSE sinon
+  taille <- length(vec)
+  if (taille==0){return(TRUE)}
+  for(i in 1:taille){
+    if(vec[i]==elem){
+      return(FALSE)
+    }
+  }
+  return(TRUE)
+}
+
+applique_texte<-function(texte,f){
+  # f est sous la forme c(A,T,.....,M)
+  texte <- enleve_retours(texte)
+  texte <- removePunctuation(texte)
+  texte <-removeNumbers(texte)
+  texte <- toupper(texte)
+  texte <- enleve_retours(texte)
+  k_deja_traites <- c()
+  for (i in 1:26){
+    for(k in 1:str_length(texte)){c 
+      if (str_sub(texte,k,k)==alphabet[i]){
+        if(pas_dans(k_deja_traites,k)){
+          texte <- `str_sub<-`(texte,k,k,omit_na=FALSE,f[i])
+          k_deja_traites <- append(k_deja_traites,k)
+          #faire une liste des k deja traitÃ©s ou des i deja traitÃ©s attention
+        }
+      }
+    }
+  }
+  return(texte)
+}
+
+stock_quali <- function(texte, f){
+  res <-c()
+  chaine <- bigrammes_de_la_chaine(applique_texte(texte,f))
+  l <- length(chaine)
+  for (k in 1:l){
+    for (j in 1:length(digramme_freq)){
+      if (chaine[k]==digramme[j]){
+        
+        res <- append(res,as.numeric(digramme_freq[j]))
+      }
+    }
+  }
+  return(res)
+}
+
+compare <- function(q1, q2){
+  res <-1
+  for (k in 1:length(q1)){
+    res <- res*(q2[k]/q1[k])
+  }
+  return(res)
+}
+
+## MCMC Metropolis hasting recuit simulÃ©
+
+MCMC <- function(texte,alphabet1,alphabet2, n){
+  texte <- toupper(texte)
+  f <- alphabet2 #on fixe f a l'identite
+  
+  chaine <- bigrammes_de_la_chaine(texte) #chaine des digramme a partir du texte
+  
+  q1 <- stock_quali(texte, f)# cree un vecteur tel que vect[i]=frequence du i-eme bigramme (par rapport a la matrice P de qualite)
+  
+  for (k in 1:n){
+    new_transpo <- transpose_bijection(f) # f*
+    
+    q2 <- stock_quali(texte,new_transpo)
+
+    Q <- compare(q1,q2)
+    #print("###################")
+    if (!((0.)%in%q2)){
+      #print("|||||||||||||||||||||||||||")
+      #print(Q)
+    
+      if (Q>1){ # produit des q2[i]/q1[i]
+        #print("q2 a une meilleure qualite que q1")
+        f <- new_transpo # q2 est meilleur que q1 en terme de qualitÃ©
+        q1 <- q2
+      }
+      else {
+        #print("q1 a une meilleure qualite que q2")
+        b <- runif(1) 
+        if ( b < Q ){
+          #print("q1 a une meilleure qualite que q2 mais on change")
+          f <- new_transpo 
+          q1 <- q2
+        }
+       # else {print("La qnouvelle transposition a une moins bonne qualitÃ©")}
+      }
+
+    }
+    if (k%%(n%/%10)==0){
+      #print(f)
+      print(applique_texte(texte,f))
+      #return(applique_texte(texte,f))
+    }
+  }
+return(applique_texte(texte,f))
+}
+alphabet
+```
+
+# Chaine de Markov et algorithme de Metropolis Hasting
+## Définition
+
+  Soit $\mu$ une mesure positive sur $\chi$, non nulle telle que 0 < $\mu$(x) <$\infty$ pour tou x dans $\chi$.
+
+Définition : (Chaîne de Markov)
+Une chaîne de Markov sur $\chi$ de matrice de transition P est une suite de variables aléatoires $(X_n)_{n\in\mathbb{N}}$ définies sur un espace $(\Omega,\mathcal {B},\mathbb{P})$ et à valeurs dans $\chi$, telle que pour tout n, et tous points $x_0$,...,$x_{n+1}$,$\mathbb{P}[X_{n+1} = x_{n+1}|X_0 = x_0,...,X_n = x_n]$ = $\mathbb{P}(x_n, x_{n+1})$.
+
+## Comment simuler une chaîne de Markov ?
+  Partant d'une matrice P stochastique et irréductible, il est possible de construire une chaîne de Markov de transition Q définie par :
+$$
+Q(\mbox{x},\mbox{y}) = \left\{
+    \begin{array}{ll}
+        P(\mbox{x},\mbox{y})\rho(\mbox{x},\mbox{y}) & \mbox{si }\mbox{x}\neq\mbox{y}\\
+        1-\sum_{\mbox{z}\neq\mbox{x}}Q(\mbox{x},\mbox{z}) & \mbox{sinon.}
+    \end{array}
+\right.
+$$
+Avec : $$
+\rho(\mbox{x},\mbox{y}) = \left\{
+    \begin{array}{ll}
+        \chi \times \chi \rightarrow\mbox{[0,1]} \\
+        (\mbox{x},\mbox{y})\mapsto \frac{\mu(\mbox{y})P(\mbox{y},\mbox{x})}{\mu(\mbox{x})P(\mbox{x},\mbox{y})}
+    \end{array}
+\right.
+$$
+
+
+# Décodage à l'aide des chaînes de Markov
+
+  Soit deux ensembles de caractère de même cardinal $A_1$ et $A_2$.$\\$
+Un texte initialement écrit avec l'ensemble $A_1$ peut être codé par substitution à l'aide d'une bijection f allant de $A_1$ dans $A_2$. Décoder le texte revient alors à determiner la bijection réciproque $f^{-1}$ de cette dernière. $\\$
+  En simulant une chaîne de Markov dans l'espace des bijection de $A_2$ dans $A_1$ va donc nous permettre de créer une suite de bijection qui converge vers $f^{-1}$. $\\$
+  Pour créer la matrice P (de qualité ou de sélection), j'ai compté les occurences de tout les diagrammes des 335 premières pages de l'ouvrage "War and Peace" de Leo Tolstoy. Ce comptage a nécessité un nettoyage préliminaire du texte : enlever les retours à la ligne, les espaces en trop, les caractères n'appartenant pas à $A_2$.$\\$
+$\\$
+$\\$
+On définit la qualité d'une bijection par rapport à un texte comme : M(f) = $\prod_{i\in{texte}}P(s_i,s_{i+1})$ avec $s_i$ un caractère du texte. $\\$
+$\\$
+
+L'algorithme se comporte de la manière suivante : $\\$
+
+$\\$ -Fixer un f quelconque. $\\$
+
+$\\$ -Calculer $M(f)$. $\\$
+
+$\\$ -Effectuer une transposition aléatoire pour obtenir f$*$. $\\$
+
+$\\$ -Calculer $M(f$ $*$ $)$ : si $M(f$ $*$  $)$ > $M(f)$, on accepte f$*$, sinon on l'accepte avec la probabilité $p$, qui est la probabilité qu'un Bernouilli de paramètre  
+
+$\frac{M(f*)}{M(f)}$ soit égale à 1.$\\$
+
+$\\$ -Recommencer à partir de la deuxième étape. $\\$
+
+# Simulation
+
+Dans cette partie on propose 2 méthodes interactives à l'utilisateur. Le codage à l'aide d'une permuation aléatoire et le décodage par la méthode MCMC appliquée à un texte de langue anglaise.
+
+## Codage par  une substitution 
+
+On propose à l'utilisateur de rentrer un texte de son choix et de le coder par substitution à laide de permutations. On applique une permutation aléatoire à l'alphabet prise uniformément dans $S_{26}$(d'après l'algorithme de $Fisher Yates$).
+La fonction applique_texte applique cette bijection entre l'alphabet du texte à coder et l'alphabet du texte codé. Dans notre cas ces alphabets sont les mêmes. Cette fonction nettoie aussi le texte c'est à dire qu'elle enlève la ponctuation et mets le texte entièrement en majuscules car on analysera les bigrammes en majuscules par la suite.
+
+```{r,echo=FALSE}
+ui <- fluidPage(
+  verticalLayout( 
+    textInput("texte", "Entrez un texte", ""),
+    verbatimTextOutput(outputId="texte") 
+  )
+) 
+
+# Define server logic required to draw a histogram
+server <- function(input, output) {
+   output$texte <- renderText({applique_texte(input$texte,exemple_f)})
+}
+
+# Run the application 
+shinyApp(ui = ui, server = server)
+
+```
+
+
+## Décodage par méthode MCMC
+
+Ici on se sert de Shiny pour proposer à l'utilisateur de rentrer le texte de son choix et de le décoder avec la méthode MCMC. Le texte que l'utilisateur rentre doit être en anglais et de longueur pas trop courte. Il doit aussi être assez diversifié en terme de lettres de l'alphabet.
+
+On utilise donc la méthode MCMC que l'on a implémenté plus haut  pour décoder le texte.
+
+J'ai pris un texte très long rédigé en anglais et pour chaque lettre de l’alphabet (contenant l'espace donc composé de $27$ caractères), on mesure la probabilité que celle-ci soit suivie par chacune des autres lettres. Ceci nous donne une matrice de qualité et à partir d'un texte codé par une substitution $f$ que l’on cherche à deviner. Pour toute substitution possible $\sigma$, on peut évaluer la qualité $Q$ de cette substitution.
+
+Notre algorithme maximise donc $Q$ et lorsq'une substitution obtenue par un changement local c'est à dire une transposition appliquée à la substitution de l'itération précédente augmente $Q$, on la garde  sinon, on la garde avec une certaine probabilité $p$ et on garde la substitution de l'itérationn précédente avec une probablilité ${1 - p}$.
+
+Pour cela, j'ai implémenté une fonction qui compare la qualité de deux textes bigrammes par bigrammes en faisant le rapport des qualités stockées grâce à la foncion stock_quali.
+Cet algorithme va donc converger vers $argmax    Q($f$)$ pour $f$ une substitution de l'espace des substitutions.
+```{r, echo=FALSE}
+ui <- fluidPage(
+  verticalLayout( 
+    textInput("texte1", "Entrez un texte codé", value = "texte"),
+    sliderInput("n", "Choix du nombre d'itérations", min = 1, max = 10000, value = 0),
+    submitButton("Décodage par MCMC"),
+    verbatimTextOutput(outputId="texte2") 
+  )
+) 
+
+server <- function(input, output){
+  output$texte2 <- renderText({MCMC(input$texte1,alphabet,alphabet,input$n)})
+}
+
+shinyApp(ui = ui, server = server)
+```
